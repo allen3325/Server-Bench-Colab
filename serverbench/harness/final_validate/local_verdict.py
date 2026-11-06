@@ -139,6 +139,11 @@ def _environment(task: str, *, reference: bool) -> dict[str, str]:
         "PYTHONPATH": f"{VERIFIER}/harness",
         "SERVERBENCH_TASK_CONTEXT": f"{VERIFIER}/task_context",
         "HF_DATASETS_OFFLINE": "1",
+        # The worker starts the candidate with `su agent -p`, and su resets
+        # PATH; bash then reads $BASH_ENV, whose hook puts this PATH back, so
+        # `serve.sh` gets the image's python3 rather than the host's.
+        "SERVERBENCH_LOCAL_PATH": path,
+        "BASH_ENV": str(_sandbox().PROFILE_HOOK),
     }
     module = _harbor_env()._task_module(REPO / "serving_tasks" / task)
     if module is not None:
@@ -270,14 +275,13 @@ def judge(task: str, version: Path, out: Path, *, development: bool = False,
         for name in ("candidate-phase.json", "reference-answers.json"):
             if (out / name).is_file():
                 shutil.copy2(out / name, EVIDENCE / name)
-        from . import agentx_reference
+        # The candidate phase's AgentX evidence (the replies it committed,
+        # `outputs.json` and the raw export the EOS gate audits). Records of
+        # what the candidate SAID; no candidate code reaches this sandbox.
         artifacts = out / "agentx" / target
-        with contextlib.suppress(FileNotFoundError):
-            raw = agentx_reference._raw_export(artifacts)
-            if raw is not None:
-                destination = EVIDENCE / raw.relative_to(out)
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(raw, destination)
+        if artifacts.is_dir():
+            shutil.copytree(artifacts, EVIDENCE / "agentx" / target,
+                            symlinks=False, dirs_exist_ok=True)
         command = [AGENTX_PYTHON, "-m", "final_validate.modal_worker", "reference",
                    "--task", task, "--target", target,
                    "--candidate-tree-sha", candidate_tree_sha]
