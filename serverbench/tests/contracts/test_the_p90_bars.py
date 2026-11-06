@@ -32,6 +32,9 @@ def sl():
 P90_ONLY = {
     "qwen3_5_2b_standard_1xL40": (2707.8, 12.19),
     "qwen3_5_2b_instructed_1xL40": (2707.8, 12.19),
+    # Provisional until `serverbench/scripts/colab/calibrate.py record` runs
+    # on an L4; update this line to the bars it writes.
+    "qwen3_5_2b_standard_1xL4": (4100.0, 35.0),
     "qwen3_5_9b_standard_2xL40": (4100.2848398999995, 23.497353185237426),
     "gemma4_e4b_it_standard_1xL40": (2526.9273697000003, 121.70566402153604),
     "qwen3_5_9b_standard_modal_2xL40S": (10000, 60.0),

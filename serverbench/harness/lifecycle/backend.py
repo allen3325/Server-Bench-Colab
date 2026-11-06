@@ -11,6 +11,9 @@ to:
 
     sb260916t172128z646511-main-1     a local docker container
     modal:sb-NIgdDshqEHsPMcgticF5NJ   a Modal sandbox
+    local:sb260916t172128z646511      namespaces on this host, no docker
+                                      (`serving_evolve/local_sandbox.py`;
+                                      Google Colab is the host it is for)
 
 Anything that would shell out to `docker exec` asks this module for an argv
 instead.
@@ -45,6 +48,25 @@ IN_SANDBOX_ADDRESS = "127.0.0.1"
 
 def is_modal(container: str) -> bool:
     return str(container or "").startswith(MODAL_PREFIX)
+
+
+#: A container name carrying this prefix is a local namespace sandbox.
+LOCAL_PREFIX = "local:"
+
+
+def is_local(container: str) -> bool:
+    """Is this a namespace sandbox on this host (`serving_evolve.local_sandbox`)?
+
+    Like docker, the workspace is the host directory itself (bind-mounted at
+    /workspace), so nothing is pulled or pushed; unlike docker, there is no
+    daemon to ask about mounts, reservations or container ids.
+    """
+    return str(container or "").startswith(LOCAL_PREFIX)
+
+
+def _local():
+    from serving_evolve import local_sandbox
+    return local_sandbox
 
 
 def sandbox_id(container: str) -> str:
@@ -85,6 +107,9 @@ def exec_argv(container: str, workdir: str, command: str, *,
                 "--sandbox", sandbox_id(container), "--workdir", workdir,
                 "--command", command]
         return [*argv, "--stdin"] if interactive else argv
+    if is_local(container):
+        # stdin passes straight through nsenter, so `interactive` needs nothing.
+        return _local().exec_argv(container, workdir, command)
     inner = f"cd {shlex.quote(workdir)} && {command}" if workdir else command
     return ["docker", "exec", *(["-i"] if interactive else []),
             container, "bash", "-lc", inner]
@@ -107,6 +132,9 @@ def remove(container: str, *, timeout: float = 120.0) -> str:
                 [modal_python(), str(_helper()), "terminate",
                  "--sandbox", sandbox_id(container)],
                 capture_output=True, text=True, timeout=timeout, check=False)
+        elif is_local(container):
+            how = _local().terminate(_local().name_of(container))
+            return "removed" if how == "terminated" else how
         else:
             got = subprocess.run(["docker", "rm", "-f", container],
                                  capture_output=True, text=True,
@@ -132,6 +160,13 @@ def put_file(container: str, text: str, path: str, *,
              "--sandbox", sandbox_id(container), "--path", path],
             input=text, text=True, capture_output=True, timeout=timeout,
             check=False)
+    elif is_local(container):
+        try:
+            _local().put_file(container, text, path)
+        except OSError as exc:
+            raise RuntimeError(f"could not write {path} into {container}: "
+                               f"{exc}") from exc
+        return
     else:
         got = subprocess.run(
             ["docker", "exec", "-i", container, "bash", "-c",
@@ -175,9 +210,12 @@ def pull_workspace(container: str, destination: Path, *,
 def describe(container: str) -> dict:
     """What this container is, for the run's own record."""
     return {"container": container,
-            "backend": "modal" if is_modal(container) else "docker",
+            "backend": ("modal" if is_modal(container)
+                        else "local" if is_local(container) else "docker"),
             "measures_from_inside": measures_from_inside(container),
-            "address": IN_SANDBOX_ADDRESS if is_modal(container) else "bridge"}
+            "address": (IN_SANDBOX_ADDRESS
+                        if is_modal(container) or is_local(container)
+                        else "bridge")}
 
 
 def sync_requests(container: str, destination: Path) -> None:

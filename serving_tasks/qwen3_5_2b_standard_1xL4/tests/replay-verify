@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Generated convenience entry point for the public AgentX replay preflight.
+set -euo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$HERE"
+exec python3 -m final_verdict.replay_verify "qwen3_5_2b_standard_1xL4" "$@"

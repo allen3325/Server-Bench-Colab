@@ -1,0 +1,69 @@
+schema_version = "1.1"
+
+[task]
+name = "serverbench/qwen3_5_2b_standard_1xL4"
+description = "Serve Qwen3.5-2B on one L4 for the AgentX coding-session replay at a concurrency the system chooses itself, and earn the most token value per GPU dollar from requests that meet the p90 TTFT and TPOT bars."
+authors = []
+keywords = ["serverbench", "llm-serving", "dollars_per_dollar"]
+
+[metadata]
+suite = "serverbench"
+group = "serving"
+category = "serving-system-evolution"
+task_id = "qwen3_5_2b_standard_1xL4"
+objective = "dollars_per_dollar"
+devices = 1
+
+# REQUEST SCORING (request_p90_billable_tokens_v4). There is no hard latency gate: every
+# profiling request that meets BOTH p90 bars below scores 1, every other
+# request scores 0. Bill only qualifying requests' input/output token value,
+# divided by the full GPU-time cost. Correctness and replay fidelity remain hard
+# eligibility gates. Frozen before any agent sees the task. Regenerated from
+# `contract.yaml`.
+single_objective = "dollars_per_dollar"
+hard_gates = false
+hard_correctness_and_replay_gates = true
+request_scoring_kind = "request_p90_billable_tokens_v4"
+gate_p90_ttft_ms = 4100.0
+gate_p90_tpot_ms = 35.0
+gate_replay_fidelity = true
+harbor_version = "0.15.0"
+
+[verifier]
+timeout_sec = 3600.0
+# The verifier gets its OWN container rather than reusing the agent's: Harbor's
+# default puts `tests/` into the container the agent just used, which is safe
+# only because AGENT_END precedes the verifier -- a timing guarantee, and this
+# fleet has had processes outlive what should have ended them.
+environment_mode = "separate"
+
+[agent]
+timeout_sec = 14400.0
+
+# ---------------------------------------------------------------- DOCKER MODE
+#
+# The container is a LOCAL docker container, stood up by Harbor's
+# `DockerEnvironment` on this host's own cards. See `_template/docker/MODE.md`.
+[environment]
+type = "docker"
+build_timeout_sec = 3600.0
+cpus = 8
+memory_mb = 65536
+storage_mb = 122880
+# BOTH keys are required for a GPU run. The local docker backend has
+# `capabilities.gpus = False` and RAISES in environments/base.py::
+# _validate_gpu_support if effective gpus > 0, so `override_gpus` silences the
+# guard and the overlay is what actually grants the device.
+override_gpus = 0
+gpus = 0
+# Resolved from the checkout running Harbor. A generated task must not be tied
+# to the home directory of the person who packaged it.
+extra_docker_compose = ["configs/gpu_overlay_nvidia.yaml"]
+# `no-network`, not `none`. Harbor's `NetworkMode` enum admits exactly
+# `no-network`, `public` and `allowlist`; `none` is docker-compose's spelling
+# and it made every one of 25 packages fail `Task.is_valid_dir`.
+network_mode = "no-network"
+
+[verifier.env]
+
+[environment.env]

@@ -641,6 +641,8 @@ class Ownership:
             # for it would fail and record an empty id.
             if backend.is_modal(name):
                 container_id = backend.sandbox_id(name)
+            elif backend.is_local(name):
+                container_id = name
             else:
                 try:
                     container_id = container_id_of(name)
@@ -822,10 +824,11 @@ class Ownership:
         # `docker stop modal:sb-...` would name no docker container, and the
         # sandbox would keep its GPUs until its own timeout. A leaked local
         # card is wasted; a leaked sandbox is billed.
-        if backend.is_modal(name):
+        if backend.is_modal(name) or backend.is_local(name):
             how = backend.remove(name)
             self.journal.append("container_released", name=name,
-                                backend="modal", how=how)
+                                backend="modal" if backend.is_modal(name)
+                                else "local", how=how)
             return how
         got = _docker("stop", name)
         if remove:
@@ -1627,7 +1630,8 @@ def boot_contract(*, workspace: Path, container: str, python: str,
         ["docker", "inspect", "-f",
          "{{range .Mounts}}{{.Source}}->{{.Destination}} {{end}}", container],
         capture_output=True, text=True, timeout=60, check=False
-    ) if not backend.is_modal(container) else subprocess.CompletedProcess(
+    ) if not (backend.is_modal(container) or backend.is_local(container)
+              ) else subprocess.CompletedProcess(
         # A SANDBOX HAS NO BIND MOUNTS. Nothing from this host is visible
         # inside it -- the workspace was uploaded and the checkpoint is a
         # volume -- so there is no host path that could be foreign, which is

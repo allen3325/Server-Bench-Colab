@@ -221,9 +221,29 @@ class _Server(socketserver.ThreadingTCPServer):
     allowed_hosts: frozenset[str] = ALLOWED
 
 
+class _UnixServer(socketserver.ThreadingUnixStreamServer):
+    """The same broker on a unix socket, for the local (namespace) backend.
+
+    A sandbox's network namespace has no route to this host's addresses, but a
+    unix socket is a file and crosses network namespaces; the sandbox relays
+    127.0.0.1:3128 to it. See `serving_evolve/local_sandbox.py`.
+    """
+    daemon_threads = True
+    log_path: Path | None = None
+    allowed_hosts: frozenset[str] = ALLOWED
+
+
 def serve(bind: str, port: int, log: Path | None,
-          allowed_hosts: frozenset[str] | None = None) -> _Server:
-    server = _Server((bind, port), _Handler)
+          allowed_hosts: frozenset[str] | None = None,
+          unix: Path | None = None) -> _Server:
+    if unix is not None:
+        with contextlib.suppress(FileNotFoundError):
+            Path(unix).unlink()
+        server = _UnixServer(str(unix), _Handler)
+        # The sandbox reaches it as the agent user.
+        os.chmod(unix, 0o666)
+    else:
+        server = _Server((bind, port), _Handler)
     server.log_path = log
     server.allowed_hosts = allowed_hosts or ALLOWED
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -242,12 +262,22 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--allow-host", action="append", default=[],
                     help="exact HTTPS hostname to relay; repeatable")
     ap.add_argument("--print-port", action="store_true")
+    ap.add_argument("--unix", type=Path, default=None,
+                    help="listen on this unix socket instead of TCP (the "
+                         "local namespace backend)")
     args = ap.parse_args(argv)
 
     allowed_hosts = frozenset(args.allow_host) or ALLOWED
-    server = serve(args.bind, args.port, args.log, allowed_hosts)
-    chosen = server.server_address[1]
-    if args.print_port:
+    server = serve(args.bind, args.port, args.log, allowed_hosts,
+                   unix=args.unix)
+    if args.unix is not None:
+        print(f"unix:{args.unix}", flush=True)
+        chosen = 0
+    else:
+        chosen = server.server_address[1]
+    if args.unix is not None:
+        pass
+    elif args.print_port:
         print(chosen, flush=True)
     else:
         print(f"egress broker on {args.bind}:{chosen}; "

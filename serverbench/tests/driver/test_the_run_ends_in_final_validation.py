@@ -204,8 +204,13 @@ def test_the_verdict_follows_the_backend_the_run_actually_used() -> None:
     assert '"--backend", "modal"' in body, (
         "the validator never tells measure_published which backend to serve "
         "the candidate on")
-    assert 'if args.gpu' in body and 'backend != "modal"' in body, (
+    # Docker is the only backend that takes card indices, a deny list or a
+    # host port: Modal's cards are remote, and the local (namespace) backend
+    # serves the verdict in its own sandboxes on the card it already has.
+    assert 'if args.gpu' in body and 'backend == "docker"' in body, (
         "local card indices are forwarded for a run that had none")
+    assert '"--backend", "local"' in body, (
+        "a local-sandbox run is sent to the docker verdict")
 
     measure = (Path(__file__).resolve().parents[3] / "serverbench"
                / "harness" / "final_validate" / "tools"

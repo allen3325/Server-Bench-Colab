@@ -138,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="a device index ALREADY CLAIMED for this run. Omit to "
                          "let the verdict take a lease")
     ap.add_argument(
-        "--backend", default="docker", choices=("docker", "modal"),
+        "--backend", default="docker", choices=("docker", "modal", "local"),
         help="where the candidate and the private reference stage run")
     ap.add_argument("--deny", default="",
                     help="device indices to fence off, forwarded to the verdict")
@@ -200,11 +200,11 @@ def main(argv: list[str] | None = None) -> int:
             "--model-dir", str(args.model_dir),
             "--run-dir", str(run_dir), "--port", str(port),
         ]
-        if args.gpu and args.backend != "modal":
+        if args.gpu and args.backend == "docker":
             command += ["--device", args.gpu]
         if args.deny:
             command += ["--deny", args.deny]
-        if arm == "candidate" and args.backend != "modal":
+        if arm == "candidate" and args.backend == "docker":
             if not args.image:
                 raise SystemExit(
                     "--image is required to measure the candidate: a published "
@@ -218,11 +218,16 @@ def main(argv: list[str] | None = None) -> int:
             command = [modal_python(), "-m", "final_validate.modal_verdict",
                        "--task", task_dir.name, "--version", str(args.version),
                        "--target", arm, "--out", str(run_dir / f"modal-{arm}")]
+        if args.backend == "local":
+            command = [sys.executable, "-m", "final_validate.local_verdict",
+                       "--task", task_dir.name, "--version", str(args.version),
+                       "--model-dir", str(args.model_dir),
+                       "--target", arm, "--out", str(run_dir / f"local-{arm}")]
 
         print(f"\n=== {arm} ===", flush=True)
         code = run(command, log=run_dir / f"{arm}.log")
-        if args.backend == "modal":
-            result = run_dir / f"modal-{arm}" / f"scenario-{arm}.json"
+        if args.backend in ("modal", "local"):
+            result = run_dir / f"{args.backend}-{arm}" / f"scenario-{arm}.json"
             if code == 0 and result.is_file():
                 shutil.copy2(result, run_dir / result.name)
         outcomes[arm] = code

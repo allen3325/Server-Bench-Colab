@@ -306,6 +306,11 @@ def _execute(controller, request: dict) -> None:
         inside = f"/workspace/agentx/full-tests/{request_id}"
         if backend.is_modal(controller.container):
             backend.push_directory(controller.container, root, inside)
+        if backend.is_local(controller.container):
+            # The driver is root here; the frozen source and the evidence
+            # directory have to be the agent's, as they are on docker.
+            from serving_evolve import local_sandbox
+            local_sandbox.give_to_agent(root)
         script = _in_container_script(
             task=controller.plan.task_dir.name, inside=inside,
             tree_sha=fingerprint, duration_s=duration)

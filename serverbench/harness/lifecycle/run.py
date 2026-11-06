@@ -739,6 +739,14 @@ class Lifecycle:
         on this host? Asked in one place so the guards cannot drift apart."""
         return os.environ.get("SERVERBENCH_BACKEND", "").lower() == "modal"
 
+    @property
+    def on_local(self) -> bool:
+        """Is this run's environment a namespace sandbox on this host (no
+        docker; `serving_evolve/local_sandbox.py`)? The host is the run's own
+        machine -- a Colab runtime -- so there is no fleet to claim cards
+        from, no neighbour to hold them against and no daemon to ask."""
+        return os.environ.get("SERVERBENCH_BACKEND", "").lower() == "local"
+
     def claim_devices(self) -> dict[int, str]:
         """Atomically claim every clean card before any expensive setup.
 
@@ -764,6 +772,24 @@ class Lifecycle:
                      "and do not apply"))
             self._claimed_device_uuids = {}
             return {}
+        if self.on_local:
+            # A SINGLE-TENANT MACHINE WITH NO CONTAINER RUNTIME. The fleet
+            # claim asks docker which containers reserve a card, and there is
+            # no docker here; the machine (a Colab runtime) is this run's
+            # alone. What is recorded instead is that the card was idle.
+            busy = foreign_processes(self.plan.gpu)
+            if busy:
+                raise ws_mod.HarnessSetupFailed(
+                    f"GPU {self.plan.gpu} already carries {len(busy)} compute "
+                    f"process(es) before the run started: {busy[:3]}")
+            uuids = {index: device_uuid(index) for index in self.plan.gpus}
+            self.journal.append(
+                "devices_not_claimed", backend="local", uuids=uuids,
+                why=("a single-tenant host with no container runtime: the "
+                     "card was checked idle, and there is no fleet to claim "
+                     "it from or neighbour to hold it against"))
+            self._claimed_device_uuids = uuids
+            return uuids
         if self._claimed_device_uuids is not None:
             return self._claimed_device_uuids
         if self.own is None:
@@ -857,6 +883,59 @@ class Lifecycle:
         self.own.took_container(container)
         return container
 
+    def _start_on_local(self) -> str:
+        """Stand the environment up as a namespace sandbox on this host.
+
+        The same contract as the other two: a setup subprocess that writes
+        `harbor_environment.json` naming the container (`local:<name>`), and
+        an egress broker this run must claim so teardown can stop it.
+        """
+        plan = self.plan
+        script = plan.repo / "serverbench/scripts/agent/local_env.py"
+        if not script.is_file():
+            raise ws_mod.HarnessSetupFailed(f"{script} is missing")
+        got = subprocess.run(
+            [sys.executable, str(script),
+             "--workspace", str(self.built.path),
+             "--model", str(plan.model_dir),
+             "--env-input", str(plan.env_input),
+             "--gpu", plan.device_spec,
+             "--out", str(self.identity.root),
+             "--task", str(plan.task_dir),
+             "--agent-cli", plan.agent_cli,
+             "--agent-model", plan.agent_model or "",
+             "--agent-effort", plan.agent_effort or "",
+             *(["--agent-env", str(plan.agent_env)] if plan.agent_env else []),
+             *(["--credentials", str(plan.credentials)]
+               if getattr(plan, "credentials", None) else []),
+             "--name", f"sb{self.identity.run_id.replace('-', '')[-20:]}"],
+            cwd=str(plan.repo), capture_output=True, text=True,
+            timeout=1800, check=False)
+        if got.stdout:
+            print(got.stdout[-3000:])
+        if got.returncode != 0:
+            raise ws_mod.HarnessSetupFailed(
+                f"local_env.py exited {got.returncode}: "
+                f"{(got.stdout + got.stderr)[-800:]}")
+        record = self.identity.root / "harbor_environment.json"
+        try:
+            composed = json.loads(record.read_text("utf-8"))
+            container = composed["container"]
+        except Exception as exc:                               # noqa: BLE001
+            raise ws_mod.HarnessSetupFailed(
+                f"the local environment named no container: {exc!r}") from None
+        broker_pid = ((composed.get("egress_broker") or {}).get("pid") or 0)
+        if broker_pid:
+            self.own.took_process(
+                int(broker_pid),
+                what="egress broker (the sandbox's only route out)",
+                argv=[str((composed.get("egress_broker") or {}).get("endpoint")
+                          or "")])
+        self.journal.append("container_backend",
+                            **backend.describe(container))
+        self.own.took_container(container)
+        return container
+
     def _start_through_harbor(self, uuids: dict) -> str:
         """Stand the environment up with Harbor, or raise. Returns its name.
 
@@ -881,6 +960,8 @@ class Lifecycle:
         # this line is identical for both.
         if self.on_modal:
             return self._start_on_modal(python)
+        if self.on_local:
+            return self._start_on_local()
         script = plan.repo / "serverbench/scripts/agent/harbor_env.py"
         if not python.is_file():
             raise ws_mod.HarnessSetupFailed(
@@ -977,7 +1058,7 @@ class Lifecycle:
         Never fatal. A host with no torch-capable interpreter simply does not
         get the reservation, and the run says so.
         """
-        if self.on_modal:
+        if self.on_modal or self.on_local:
             return
         interpreter = ws_mod.holder_interpreter()
         script = plan_repo = self.plan.repo / "serverbench/scripts/gpu_holder.py"
@@ -1150,7 +1231,8 @@ class Lifecycle:
         # Pushed through `backend.put_file`, which sends the bytes on stdin --
         # never on a command line -- and chowns the file to the agent at 0600,
         # exactly as the docker path leaves it.
-        if self.container and backend.is_modal(self.container):
+        if self.container and (backend.is_modal(self.container)
+                               or backend.is_local(self.container)):
             try:
                 backend.put_file(self.container,
                                  staged.read_text("utf-8"),
@@ -1199,7 +1281,9 @@ class Lifecycle:
         the run -- so a number measured inside it is known to have been, rather
         than quietly averaged in with the rest.
         """
-        if self.on_modal:
+        if self.on_modal or self.on_local:
+            # Local: a single-tenant host with no daemon to attribute a
+            # process to a container; nothing else runs here.
             # THE CARDS ARE NOT ON THIS MACHINE. Watching local indices here
             # would report a neighbour's process on this host as contention on
             # a run whose GPUs are Modal's.
@@ -1809,6 +1893,19 @@ class Lifecycle:
         if seed is None or backend.is_modal(self.container):
             return
         dest = "/home/agent/.claude/projects"
+        if backend.is_local(self.container):
+            from serving_evolve import local_sandbox
+            uid, gid = local_sandbox.agent_ids()
+            try:
+                shutil.copytree(seed, dest, dirs_exist_ok=True)
+                for path in [Path(dest), *Path(dest).rglob("*")]:
+                    os.chown(path, uid, gid)
+                ok, why = True, ""
+            except OSError as exc:
+                ok, why = False, str(exc)[:300]
+            self.journal.append("agent_session_seeded", source=str(seed),
+                                destination=dest, ok=ok, why=why)
+            return
         made = subprocess.run(
             backend.exec_argv(self.container, "", f"mkdir -p {dest}"),
             capture_output=True, text=True, timeout=120, check=False)

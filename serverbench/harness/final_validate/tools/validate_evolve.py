@@ -173,6 +173,8 @@ def backend_of(run_root: Path) -> str:
         return "docker"
     name = str(body.get("container") or "")
     declared = str(body.get("backend") or "")
+    if name.startswith("local:") or declared == "local":
+        return "local"
     return "modal" if name.startswith("modal:") or declared == "modal" else "docker"
 
 
@@ -262,14 +264,19 @@ def main(argv: list[str] | None = None) -> int:
         # `measure_published --backend modal` serves it in a fresh read-only
         # sandbox instead; everything else about the verdict is unchanged.
         argv_out += ["--backend", "modal"]
+    elif backend == "local":
+        # NO DOCKER ON THIS HOST. The version is served in fresh namespace
+        # sandboxes on this machine's card (`final_validate/local_verdict.py`),
+        # after every process of the agent's is gone.
+        argv_out += ["--backend", "local"]
     else:
         if args.image:
             argv_out += ["--image", args.image]
         if args.gpu:
             argv_out += ["--gpu", args.gpu]
-    if args.deny and backend != "modal":
+    if args.deny and backend == "docker":
         argv_out += ["--deny", args.deny]
-    if args.port and backend != "modal":
+    if args.port and backend == "docker":
         argv_out += ["--port", str(args.port)]
     print(f"final verdict for {task_dir.name} {version_id}: {version_dir}")
     print(f"  backend {backend}"

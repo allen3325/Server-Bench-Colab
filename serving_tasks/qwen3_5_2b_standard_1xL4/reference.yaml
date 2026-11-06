@@ -1,0 +1,34 @@
+# Created by serving_tasks/_manage/new_task.py; change it with `taskctl set`.
+kind: serving_task_reference
+schema: serverbench.task_reference/1
+task_id: qwen3_5_2b_standard_1xL4
+correctness:
+  rule: replay_fidelity_and_held_out_answers_vs_plain_checkpoint
+  reference_arm: sglang
+  answer_sample_size: 20
+  max_absolute_accuracy_drop: 0.2
+  max_token_regret: 4.0
+  eos_audit: true
+arms:
+- framework: sglang
+  serve_extra: "--reasoning-parser qwen3 --tool-call-parser qwen3_coder --speculative-algorithm NEXTN --speculative-num-steps 3 --speculative-eagle-topk 1 --speculative-num-draft-tokens 4 --mamba-radix-cache-strategy extra_buffer --enable-flashinfer-allreduce-fusion --mem-fraction-static 0.8"
+- framework: vllm
+  serve_extra: "--max-model-len 262144 --gpu-memory-utilization 0.90 --max-num-seqs {concurrency}"
+- framework: tensorrt-llm
+  serve_extra: "--max_seq_len 262144 --max_batch_size 512"
+# sglang_settings: generated from arms[sglang].serve_extra by `taskctl render`;
+# change the launch line, not this block.
+sglang_settings:
+  image: lmsysorg/sglang:v0.5.19
+  reasoning-parser: qwen3
+  tool-call-parser: qwen3_coder
+  speculative-algorithm: NEXTN
+  speculative-num-steps: 3
+  speculative-eagle-topk: 1
+  speculative-num-draft-tokens: 4
+  mamba-radix-cache-strategy: extra_buffer
+  enable-flashinfer-allreduce-fusion: true
+  mem-fraction-static: 0.8
+# `concurrency_search` is added once SGLang has been measured on this model and
+# hardware; its `adopted` point is the module's REFERENCE_CONCURRENCY, which the
+# instruction states as a reference (`taskctl set --reference-concurrency N`).
