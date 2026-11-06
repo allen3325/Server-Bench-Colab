@@ -118,7 +118,8 @@ def plain_reference_serve_extra(contract) -> str:
         if (token.startswith("--speculative-") or
                 token.split("=", 1)[0] in {
                     "--attention-backend", "--prefill-attention-backend",
-                    "--decode-attention-backend", "--max-running-requests"}):
+                    "--decode-attention-backend", "--max-running-requests",
+                    "--chunked-prefill-size"}):
             index += 1
             if ("=" not in token and index < len(parts)
                     and not parts[index].startswith("--")):
@@ -126,8 +127,15 @@ def plain_reference_serve_extra(contract) -> str:
             continue
         plain.append(token)
         index += 1
+    # Deterministic Triton prefill only cuts chunks at multiples of
+    # SGLANG_TRITON_PREFILL_TRUNCATION_ALIGN_SIZE (4096). SGLang's default
+    # chunk on a card under 35 GB (L4, A10) is 2048, below that alignment, so
+    # a prompt longer than one chunk is never scheduled and the server wedges.
+    # Chunk boundaries are aligned either way, so the scored logprobs do not
+    # depend on this value.
     plain.extend(["--attention-backend", "triton",
-                  "--max-running-requests", "1"])
+                  "--max-running-requests", "1",
+                  "--chunked-prefill-size", "4096"])
     if "--enable-deterministic-inference" not in plain:
         plain.append("--enable-deterministic-inference")
     # Cached prefix boundaries still change BF16 intermediates in the

@@ -196,7 +196,8 @@ def chown_tree(path: Path, uid: int, gid: int) -> None:
 
 def run_in(container: str, command: str, *, timeout: float = 240) -> subprocess.CompletedProcess:
     return subprocess.run(sandbox.exec_argv(container, "", command),
-                          capture_output=True, text=True, timeout=timeout,
+                          stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                          timeout=timeout,
                           check=False)
 
 
