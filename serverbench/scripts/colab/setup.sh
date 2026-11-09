@@ -202,6 +202,17 @@ PY
         grep -q "$lib " <<<"$cache" || die "the loader cannot find the driver's $lib"
     done
     ok "driver libraries in the loader cache"
+    # The link-time libcuda.so. JIT builds (FlashInfer in SGLang, an agent's
+    # cpp_extension) link with `-L$CUDA_HOME/lib64/stubs -lcuda`; the image
+    # gets that stub from the CUDA driver-dev package, which these .debs do
+    # not include, and the driver ships only libcuda.so.1. Without it SGLang
+    # dies capturing its prefill graph: "ld: cannot find -lcuda".
+    stubs=/usr/local/cuda-12.8/lib64/stubs
+    if [ ! -e "$stubs/libcuda.so" ]; then
+        driver="$(awk '/libcuda\.so\.1 .*x86-64/ {print $NF; exit}' <<<"$cache")"
+        mkdir -p "$stubs" && ln -sf "$driver" "$stubs/libcuda.so"
+    fi
+    ok "link-time libcuda.so -> $(readlink -f "$stubs/libcuda.so")"
     /usr/local/cuda/bin/nvcc --version | tail -1
 fi
 
