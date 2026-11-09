@@ -93,7 +93,13 @@ def local_launch(target, *, image="", model_dir, device_spec="", port, name,
     command += shlex.split(serve_extra or "")
     child_env = dict(os.environ)
     child_env.pop("PYTHONPATH", None)
+    # FlashInfer JIT-compiles kernels at startup and runs `ninja` and `nvcc` off
+    # PATH; `ninja` lives in SGLang's own venv, which nothing else puts on PATH
+    # (local_verdict.py does the same for the reference arm).
+    cuda_home = os.environ.get("SERVERBENCH_LOCAL_CUDA_HOME", "/usr/local/cuda")
     child_env.update({"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
+                      "PATH": f"{SGLANG_BIN}:{cuda_home}/bin:" + child_env.get("PATH", ""),
+                      "CUDA_HOME": child_env.get("CUDA_HOME", cuda_home),
                       "PYTHONPATH": str(REPO / "serverbench/harness/final_validate/sglang_compat")})
     child_env.update(env or {})
     log = Path(log)
