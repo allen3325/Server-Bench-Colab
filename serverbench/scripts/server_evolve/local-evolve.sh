@@ -5,10 +5,10 @@
 # (`final_validate/local_verdict.py`). Written for a Google Colab runtime set up
 # by `serverbench/scripts/colab/setup.sh`.
 #
-#   AGENT_CLI=claude AGENT_MODEL=claude-opus-5 AGENT_ENV=<env file> \
+#   AGENT_CLI=claude AGENT_MODEL=claude-opus-5-5 AGENT_EFFORT=medium AGENT_ENV=<env file> \
 #       bash serverbench/scripts/server_evolve/local-evolve.sh <task> --hours 3
 #
-#   AGENT_CLI=codex  AGENT_MODEL=gpt-5.6-sol AGENT_EFFORT=max \
+#   AGENT_CLI=codex  AGENT_MODEL=gpt-6.1-sol AGENT_EFFORT=medium \
 #       bash serverbench/scripts/server_evolve/local-evolve.sh <task> --hours 3
 #
 # Everything else -- the brief, versions, ./full-test, the journal, the

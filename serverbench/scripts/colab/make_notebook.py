@@ -47,8 +47,8 @@ code("""
 TASK = None                     # None: the task for this runtime's GPU (e.g. qwen3_5_2b_standard_1xA100)
 GPU_RATE = 0.80                 # USD per GPU hour for a NEW GPU's task (does not change an agent comparison)
 HOURS = 3                       # each agent's wall-clock budget
-CLAUDE_MODEL, CLAUDE_EFFORT = "claude-opus-5", "xhigh"
-CODEX_MODEL, CODEX_EFFORT = "gpt-5.6-sol", "max"
+CLAUDE_MODEL, CLAUDE_EFFORT = "claude-opus-5-5", "medium"
+CODEX_MODEL, CODEX_EFFORT = "gpt-6.1-sol", "medium"
 REPO_URL = "https://github.com/allen3325/Server-Bench-Colab.git"
 BRANCH = "colab"
 REPO = "/content/Server-Bench-Colab"

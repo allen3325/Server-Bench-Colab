@@ -289,8 +289,8 @@ run_agent() {
     local cli="${1:?claude|codex}"; shift
     local hours=3 model effort
     case "$cli" in
-        claude) model=claude-opus-5; effort=xhigh ;;
-        codex)  model=gpt-5.6-sol;   effort=max ;;
+        claude) model=claude-opus-5-5; effort=medium ;;
+        codex)  model=gpt-6.1-sol;     effort=medium ;;
         *) die "agent is claude or codex" ;;
     esac
     while [ $# -gt 0 ]; do case "$1" in
