@@ -49,6 +49,49 @@ private directories unreadable, loopback and GPU working, nothing left behind.
 4. `serverbench/scripts/server_evolve/local-evolve.sh <task> --hours 3` -- once
    per agent (`AGENT_CLI=claude|codex`).
 
+## From your terminal (colab-cli), instead of the notebook
+
+[`serverbench/scripts/colab/remote.sh`](serverbench/scripts/colab/remote.sh) runs
+the same steps from your own machine with
+[colab-cli](https://github.com/googlecolab/google-colab-cli): it opens the VM,
+pushes your working tree (uncommitted changes included), and runs `setup.sh`,
+`persist.sh`, `hardware.py`, `calibrate.py`, `local-evolve.sh` and
+`verdict-only.sh` there unchanged. Several sessions (`-s NAME`) can run agents
+side by side.
+
+```
+uv tool install google-colab-cli && colab usage    # once: OAuth login (run it in a real terminal)
+export CLAUDE_CODE_OAUTH_TOKEN=... RCLONE_CONF=~/.config/rclone/rclone.conf
+R=serverbench/scripts/colab/remote.sh
+$R up --gpu L4            # colab new, push, setup.sh, secrets
+$R restore && $R task     # earlier results; this card's task
+$R run claude --hours 3 --down
+$R jobs | $R follow | $R sh | $R pull <path> | $R down
+```
+
+Verified on an L4 VM opened by colab-cli: root, `cap_sys_admin` and no
+`cap_net_admin` as in the notebook; network namespaces and bind mounts work;
+`setup.sh` and `selfcheck.py` pass. What differs, and how the script handles it:
+
+* **No Colab Secrets** (`google.colab.userdata` needs the notebook's kernel).
+  `secrets` reads the same names from your environment and sends them over
+  ssh's stdin into the same root-only files; nothing lands on a command line.
+* **One connection at a time.** colab-cli admits one `colab ssh` per runtime
+  (a second gets HTTP 429), and `colab exec` fails while one is open. Every call
+  takes one local lock and stays short; anything long runs as a detached job on
+  the VM (`/content/sb-jobs/<job>.{log,rc}`) that `follow` polls every 30 s.
+  Ctrl-C stops following, never the job.
+* **Keepalive.** colab-cli keeps a VM while its kernel is active; a job started
+  over ssh is not the kernel's, and there is no browser tab. While a job runs, a
+  loop on your machine sends the kernel a trivial `colab exec` every 5 minutes
+  (3 tries: about one call in six hangs or drops). It stops after two checks
+  with no job, so a finished run does not hold the VM. It needs your machine
+  awake. *Whether this alone keeps a VM through a 3-hour run has not been
+  measured yet* -- keep `RCLONE_CONF` set so a reclaimed VM loses nothing.
+* **Stopping.** Nothing calls `colab stop` unless asked: `down` does, and
+  `--down` (run, calibrate, verdict) does once no job runs, but only after
+  `persist.sh save` succeeds -- never without rclone.
+
 ## Switching GPUs
 
 Supported, with one rule: **one task per GPU type, calibrated on that card**.
@@ -145,3 +188,12 @@ run -- so a host tool, the driver and the verdict included, could read the
 agent's copy of the task contract. Every host entry point now pins
 `SERVERBENCH_TASK_ROOT=<repo>/serving_tasks`, and `local_sandbox.terminate`
 removes the symlinks and binds `local_env` placed.
+
+Driver libraries in the sandbox (`setup.sh`). On the current Colab image,
+`libcuda.so.1` and `libnvidia-ml.so.1` live only in `/usr/lib64-nvidia`, reached
+through the kernel's `LD_LIBRARY_PATH`; the sandbox and the verdict replace that
+variable with the CUDA 12.8 toolchain's, so inside them `nvidia-smi` and torch
+saw no GPU (`selfcheck.py`: `gpu_visible` failed). `setup.sh` now adds the
+driver directory to the loader cache -- what the NVIDIA container toolkit gives
+a container -- and fails if either library is still missing. It also retries a
+CUDA `.deb` download (NVIDIA's CDN reset one and failed a whole setup).

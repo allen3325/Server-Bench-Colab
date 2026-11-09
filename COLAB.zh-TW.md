@@ -20,6 +20,28 @@
 
 L4 任務 `qwen3_5_2b_standard_1xL4` 內附的 bar（p90 TTFT 4100 ms、TPOT 35 ms）是暫定值，`calibrate.py record` 會換成實測值並設定 reference concurrency。
 
+## 從終端機跑（colab-cli），不用 notebook
+
+[`serverbench/scripts/colab/remote.sh`](serverbench/scripts/colab/remote.sh) 用
+[colab-cli](https://github.com/googlecolab/google-colab-cli) 在自己的電腦上完成同樣的流程：開 VM、把工作目錄（包含還沒 commit 的修改）推上去，再原封不動地執行 `setup.sh`、`persist.sh`、`hardware.py`、`calibrate.py`、`local-evolve.sh`、`verdict-only.sh`。可以用 `-s NAME` 開多個 session，同時跑不同 agent。
+
+```
+uv tool install google-colab-cli && colab usage    # 一次：OAuth 登入（要在真正的終端機裡跑）
+export CLAUDE_CODE_OAUTH_TOKEN=... RCLONE_CONF=~/.config/rclone/rclone.conf
+R=serverbench/scripts/colab/remote.sh
+$R up --gpu L4            # colab new、push、setup.sh、secrets
+$R restore && $R task     # 還原先前結果；這張卡的任務
+$R run claude --hours 3 --down
+$R jobs | $R follow | $R sh | $R pull <路徑> | $R down
+```
+
+已在 colab-cli 開的 L4 VM 上驗證：和 notebook 一樣是 root、有 `cap_sys_admin`、沒有 `cap_net_admin`；network namespace 和 bind mount 可用；`setup.sh` 和 `selfcheck.py` 全部通過。不同之處與腳本的處理方式：
+
+* **沒有 Colab Secrets**（`google.colab.userdata` 只能在 notebook 的 kernel 裡用）。`secrets` 從本機環境變數讀同樣名稱的憑證，經 ssh 的 stdin 寫進同樣的 root-only 檔案，不會出現在任何命令列上。
+* **同時只能有一條連線。** colab-cli 每個 runtime 只允許一條 `colab ssh`（第二條會收到 HTTP 429），而且有 ssh 連著時 `colab exec` 會失敗。所以每次呼叫都先拿同一把本機鎖、而且只連一下；長時間的工作一律在 VM 上以分離的 job 執行（`/content/sb-jobs/<job>.{log,rc}`），`follow` 每 30 秒輪詢一次。Ctrl-C 只會停止跟看，不會停掉 job。
+* **保活。** colab-cli 是靠 kernel 有在活動來保住 VM；透過 ssh 起的 job 不屬於 kernel，也沒有瀏覽器分頁。job 執行期間，本機的迴圈每 5 分鐘對 kernel 送一次簡單的 `colab exec`（最多試 3 次：實測約每 6 次會有 1 次卡住或斷線）。連續兩次檢查都沒有 job 就停止，跑完的 run 不會一直佔著 VM。本機必須保持開機。*單靠這個能不能撐過 3 小時的 run 還沒實測過*，所以請務必設定 `RCLONE_CONF`，VM 被收走也不會遺失結果。
+* **停止 VM。** 除非你要求，否則不會 `colab stop`：`down` 會立即停止；`--down`（run、calibrate、verdict）會在沒有 job 之後停止，但只有在 `persist.sh save` 成功後才會停，沒有 rclone 就不停。
+
 ## 換 GPU
 
 可以換。前提是：**一種 GPU 一個任務，而且要先在那張卡上校準**。
@@ -145,11 +167,14 @@ rclone config show sb      # 把印出來的整段貼進 Colab Secret RCLONE_CON
 - 所有 host 端的進入點（`local-evolve.sh`、`verdict-only.sh`、`setup.sh`、`calibrate.py`、`hardware.py`、notebook）都明確指定 `SERVERBENCH_TASK_ROOT=<repo>/serving_tasks`。
 - 沙箱收掉時（`local_sandbox.terminate`），會一併移除 `local_env` 在 host 上放的 symlink，並卸載 bind mount。
 
+**沙箱裡的驅動程式庫**（`setup.sh`）。目前的 Colab 映像上，`libcuda.so.1` 和 `libnvidia-ml.so.1` 只放在 `/usr/lib64-nvidia`，要靠 kernel 的 `LD_LIBRARY_PATH` 才找得到；沙箱和最後驗證會把這個變數換成 CUDA 12.8 的路徑，結果在裡面 `nvidia-smi` 和 torch 都看不到 GPU（`selfcheck.py` 的 `gpu_visible` 失敗）。現在 `setup.sh` 會把驅動目錄加進動態連結器快取（NVIDIA container toolkit 給容器的也是這個），兩個程式庫有任何一個還找不到就直接失敗。另外下載 CUDA `.deb` 會重試（NVIDIA 的 CDN 曾經重置連線，讓整個 setup 失敗）。
+
 ## 檔案
 
 | 檔案 | 用途 |
 |---|---|
 | `serverbench/scripts/colab/ServerBench_Colab.ipynb` | notebook（由 `make_notebook.py` 產生，請改產生器再重新產生） |
+| `serverbench/scripts/colab/remote.sh` | 用 colab-cli 從本機終端機操作（取代 notebook） |
 | `serverbench/scripts/colab/setup.sh` | 每個 session 的環境設定，可重複執行 |
 | `serverbench/scripts/colab/selfcheck.py` | 隔離自我檢查 |
 | `serverbench/scripts/colab/hardware.py` | 偵測 GPU、檢查 GPU 是否符合任務、為新 GPU 建立任務 |

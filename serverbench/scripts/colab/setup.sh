@@ -142,7 +142,7 @@ if want cuda; then
         ok "already installed"
     else
         "$PY" - "$REPO/serverbench/environments/evolve-agent/Dockerfile" <<'PY'
-import hashlib, re, subprocess, sys, tempfile, urllib.request
+import hashlib, re, subprocess, sys, tempfile, time, urllib.request
 from pathlib import Path
 text = Path(sys.argv[1]).read_text()
 args = dict(re.findall(r"^ARG (\w+)=(\S+)$", text, re.M))
@@ -156,9 +156,18 @@ for key in [k for k in args if k.endswith("_DEB")]:
     if not digest:
         continue
     path = work / name
-    urllib.request.urlretrieve(f"{repo}/{name}", path)
-    if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
-        raise SystemExit(f"checksum mismatch: {name}")
+    # NVIDIA's CDN resets a connection now and then; one reset failed a whole setup.
+    for attempt in range(5):
+        try:
+            urllib.request.urlretrieve(f"{repo}/{name}", path)
+            if hashlib.sha256(path.read_bytes()).hexdigest() == digest:
+                break
+            print(f"   checksum mismatch: {name} (attempt {attempt + 1})")
+        except OSError as e:
+            print(f"   {name}: {e} (attempt {attempt + 1})")
+        time.sleep(10 * (attempt + 1))
+    else:
+        raise SystemExit(f"could not fetch {name} with its checksum")
     if key[:-4] in headers_only:
         tmp = work / "hdr"
         subprocess.run(["dpkg", "-x", str(path), str(tmp)], check=True)
@@ -178,7 +187,21 @@ PY
     # The brief names /usr/local/cuda: point it at the 12.8 toolchain torch
     # is built against (Colab's own torch carries its CUDA in wheels).
     ln -sfn /usr/local/cuda-12.8 /usr/local/cuda
-    echo /usr/local/cuda/lib64 > /etc/ld.so.conf.d/cuda.conf && ldconfig
+    echo /usr/local/cuda/lib64 > /etc/ld.so.conf.d/cuda.conf
+    # The driver's own libraries (libcuda, libnvidia-ml). Some Colab images
+    # reach them only through the kernel's LD_LIBRARY_PATH=/usr/lib64-nvidia,
+    # which the sandbox and the verdict replace with the 12.8 toolchain's:
+    # there, nvidia-smi and torch found no GPU. The loader cache is what the
+    # NVIDIA container toolkit gives a container too.
+    if [ -e /usr/lib64-nvidia/libcuda.so.1 ]; then
+        echo /usr/lib64-nvidia > /etc/ld.so.conf.d/000-nvidia-driver.conf
+    fi
+    ldconfig 2>/dev/null     # Colab's /usr/local/lib draws "is not a symbolic link" noise
+    cache="$(ldconfig -p)"   # not `ldconfig -p | grep -q`: under pipefail, grep's early exit fails it
+    for lib in libcuda.so.1 libnvidia-ml.so.1; do
+        grep -q "$lib " <<<"$cache" || die "the loader cannot find the driver's $lib"
+    done
+    ok "driver libraries in the loader cache"
     /usr/local/cuda/bin/nvcc --version | tail -1
 fi
 
