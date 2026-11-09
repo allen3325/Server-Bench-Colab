@@ -25,6 +25,7 @@ RCLONE_SHA256="0e6fa18051e67fc600d803a2dcb10ddedb092247fc6eee61be97f64ec080a13c"
 
 export UV_PYTHON_INSTALL_DIR="$SB/python"     # interpreters the agent can exec
 export HF_HOME="$SB/hf"                       # the model and corpus cache
+export SERVERBENCH_TASK_ROOT="$REPO/serving_tasks"   # never a guessed /workspace/task_context
 export PATH="$SB/bin:$PATH"
 
 say()  { printf '\n\033[1m== %s\033[0m\n' "$*"; }
@@ -41,8 +42,12 @@ AGENTX_COMMIT="$(sed -n 's/^PINNED_COMMIT = "\([0-9a-f]\{40\}\)"$/\1/p' "$PIN_FI
 AGENTX_REMOTE="$(sed -n 's/^PINNED_REMOTE = "\(.*\)"$/\1/p' "$PIN_FILE")"
 PY="$REPO/serverbench/.venv/bin/python"
 RUNTIME="$REPO/serverbench/artifacts/agentx-runtime"
-model_id()  { sed -n 's/^MODEL_ID = "\(.*\)"$/\1/p' "$REPO/serverbench/harness/final_validate/tasks/${TASK,,}.py"; }
-model_rev() { sed -n 's/^MODEL_REVISION = "\(.*\)"$/\1/p' "$REPO/serverbench/harness/final_validate/tasks/${TASK,,}.py"; }
+# A task for a new card is made after setup (hardware.py new-task) and has the
+# same model and corpus as the L4 task, so setup reads those from the L4 task.
+MODEL_TASK="$TASK"
+[ -f "$REPO/serverbench/harness/final_validate/tasks/${TASK,,}.py" ] || MODEL_TASK=qwen3_5_2b_standard_1xL4
+model_id()  { sed -n 's/^MODEL_ID = "\(.*\)"$/\1/p' "$REPO/serverbench/harness/final_validate/tasks/${MODEL_TASK,,}.py"; }
+model_rev() { sed -n 's/^MODEL_REVISION = "\(.*\)"$/\1/p' "$REPO/serverbench/harness/final_validate/tasks/${MODEL_TASK,,}.py"; }
 
 if want system; then
     say "system packages"
@@ -236,7 +241,7 @@ fi
 
 if want corpus; then
     say "the replay corpus, and its processed datasets cache"
-    "$RUNTIME/venv/bin/python" - "$REPO" "$TASK" <<'PY'
+    "$RUNTIME/venv/bin/python" - "$REPO" "$MODEL_TASK" <<'PY'
 import os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "serverbench", "harness"))
 from final_validate import tasks

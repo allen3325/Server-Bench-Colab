@@ -19,9 +19,9 @@ def code(text):
 
 
 md("""
-# ServerBench on Colab (L4): Claude vs Codex
+# ServerBench on Colab: Claude vs Codex
 
-這本 notebook 在 **一張 Colab L4** 上跑 ServerBench 的 serving-system evolve，用來比較 Claude Code 和 Codex。
+這本 notebook 在 **一張 Colab GPU**（預設 L4，也可以換 A100、H100 等，見 `COLAB.zh-TW.md` 的「換 GPU」）上跑 ServerBench 的 serving-system evolve，用來比較 Claude Code 和 Codex。
 
 Colab 不能跑 Docker，所以這裡用的是 repo 裡新增的 **local backend**：
 - agent 以一般使用者 `agent` 身分，跑在只有 loopback 的 network namespace 裡。唯一的對外連線是 egress broker，只放行模型供應商的 API，每次連線都會記錄。
@@ -30,7 +30,7 @@ Colab 不能跑 Docker，所以這裡用的是 repo 裡新增的 **local backend
 
 **順序**：
 1. 設定憑證和 runtime（每個新 session 都要重跑）
-2. **校準**：在 L4 上量 SGLang 的參考點和 p90 bar。每個任務只需要做一次，約 5–6 小時 GPU，可以分好幾個 session 完成
+2. **校準**：在這張 GPU 上量 SGLang 的參考點和 p90 bar。每種 GPU 只需要做一次（L4 約 5–6 小時），可以分好幾個 session 完成
 3. 跑 Claude（3 小時 + 約 45 分鐘驗證）
 4. 跑 Codex（3 小時 + 約 45 分鐘驗證）
 5. 比較
@@ -44,7 +44,8 @@ Colab 不能跑 Docker，所以這裡用的是 repo 裡新增的 **local backend
 
 md("## 0. 參數")
 code("""
-TASK = "qwen3_5_2b_standard_1xL4"
+TASK = None                     # None: the task for this runtime's GPU (e.g. qwen3_5_2b_standard_1xA100)
+GPU_RATE = 0.80                 # USD per GPU hour for a NEW GPU's task (does not change an agent comparison)
 HOURS = 3                       # each agent's wall-clock budget
 CLAUDE_MODEL, CLAUDE_EFFORT = "claude-opus-5", "xhigh"
 CODEX_MODEL, CODEX_EFFORT = "gpt-5.6-sol", "max"
@@ -54,8 +55,9 @@ REPO = "/content/Server-Bench-Colab"
 SB_REMOTE = "sb:serverbench-colab"   # <rclone remote>:<folder>
 CALIBRATION = "/content/sb-calibration"
 import os
-os.environ.update(TASK=TASK, CALIBRATION=CALIBRATION, HF_HOME="/opt/serverbench/hf",
+os.environ.update(CALIBRATION=CALIBRATION, HF_HOME="/opt/serverbench/hf",
                   SB_REMOTE=SB_REMOTE,
+                  SERVERBENCH_TASK_ROOT=REPO + "/serving_tasks",
                   PATH="/opt/serverbench/bin:" + os.environ["PATH"])
 """)
 
@@ -68,6 +70,13 @@ if not os.path.isdir(REPO):
 else:
     subprocess.run(["git", "-C", REPO, "pull", "--ff-only"], check=False)
 %cd {REPO}
+# Which task this runtime runs: one task per GPU type, because a task's bars and
+# dollars are its own card's (serverbench/scripts/colab/hardware.py).
+!python3 serverbench/scripts/colab/hardware.py detect
+TASK = TASK or subprocess.run(["python3", "serverbench/scripts/colab/hardware.py", "task"],
+                              capture_output=True, text=True, check=True).stdout.strip()
+os.environ["TASK"] = TASK
+print("TASK =", TASK)
 """)
 
 md("""
@@ -179,7 +188,20 @@ code("""
 """)
 
 md("""
-## 6. 校準：在 L4 上量 SGLang 的參考點和 p90 bar（每個任務只做一次）
+## 5b. 這張 GPU 的任務
+
+每種 GPU 有自己的任務（`qwen3_5_2b_standard_1x<GPU>`）。L4 的任務 repo 內建；其他 GPU 第一次使用時，會從 L4 任務複製一份（模型、token 價格、框架參數都相同），只換硬體和每小時價格 `GPU_RATE`。新任務先沿用 L4 的暫定 bar，**一定要跑第 6 節的校準**，才能拿來比較。建立後會存到雲端，下次 session 會自動還原。
+""")
+code("""
+if not pathlib.Path(REPO, "serving_tasks", TASK).is_dir():
+    !serverbench/.venv/bin/python serverbench/scripts/colab/hardware.py new-task --usd-per-gpu-hour {GPU_RATE}
+    !bash serverbench/scripts/colab/persist.sh save
+!grep -E "^(title|hardware|usd_per_gpu_hour):" serving_tasks/{TASK}/contract.yaml
+!grep -A3 service_levels serving_tasks/{TASK}/contract.yaml
+""")
+
+md("""
+## 6. 校準：在這張 GPU 上量 SGLang 的參考點和 p90 bar（每種 GPU 只做一次）
 
 方法和 repo 原本的一樣（`docs/harness/bar-derivation.md`）：
 1. **search**：offered concurrency 1, 2, 4, 8, 16 各跑一個 1,800 秒窗口，取「gross $/$ ÷ p90 端到端延遲」最高的點

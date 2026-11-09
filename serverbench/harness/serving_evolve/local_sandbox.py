@@ -345,7 +345,39 @@ def terminate(name: str, *, timeout: float = 30.0) -> str:
     leftover = [p for p in _members(body) if p != body["holder_pid"]]
     with contextlib.suppress(OSError):
         (state_dir(name) / "env.json").unlink()
+    release_paths(name)
     return "terminated" if not leftover else f"{len(leftover)} process(es) survived"
+
+
+def release_paths(name: str) -> list[str]:
+    """Take down the host paths `local_env` placed for this sandbox.
+
+    Symlinks are removed and binds unmounted; nothing else is touched (a
+    directory the brief names that held real content is not ours). Without
+    this, /workspace would keep showing the agent's writable tree on the host
+    after the run -- and `spine` guesses /workspace/task_context as a task
+    root, so a host tool could read the agent's copy of the task contract.
+    """
+    listing = state_dir(name) / "placed.json"
+    try:
+        placed = json.loads(listing.read_text())
+    except (OSError, ValueError):
+        return []
+    released = []
+    for entry in placed:
+        target = Path(entry.get("target", ""))
+        if not target.is_absolute():
+            continue
+        if entry.get("how") == "bind":
+            unbind(target)
+            released.append(str(target))
+        elif target.is_symlink():
+            with contextlib.suppress(OSError):
+                target.unlink()
+                released.append(str(target))
+    with contextlib.suppress(OSError):
+        listing.unlink()
+    return released
 
 
 # -------------------------------------------------------------- running in it

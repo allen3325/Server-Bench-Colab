@@ -35,17 +35,24 @@ RUN="${RUN%/}"
 [ -f "$RUN/journal.jsonl" ] || { echo "not a run directory: $RUN" >&2; exit 2; }
 
 PY="$REPO/serverbench/.venv/bin/python"
-LINEAGE="$("$PY" -c 'import json,sys
+read -r LINEAGE RUN_TASK < <("$PY" -c 'import json,sys
 for line in open(sys.argv[1]):
     r = json.loads(line)
     if r.get("event") == "run_created":
-        print(r["lineage_id"]); break' "$RUN/journal.jsonl")"
+        print(r["lineage_id"], r["task_id"]); break' "$RUN/journal.jsonl")
+[ -n "${RUN_TASK:-}" ] || { echo "$RUN records no run_created event" >&2; exit 2; }
+TASK="$RUN_TASK"   # the run's own task, whatever $TASK said
 FINAL="$REPO/server_output/$LINEAGE/FINAL.json"
 if [ -f "$FINAL" ] && [ "$FORCE" != 1 ]; then
     echo "this run already has a verdict: $FINAL (pass --force to measure again)" >&2
     exit 1
 fi
 
+# The repository's tasks, never a guessed root: `spine` would otherwise look at
+# /workspace/task_context -- the agent's writable copy -- whenever one shows.
+export SERVERBENCH_TASK_ROOT="$REPO/serving_tasks"
+# A task's bars and dollars are its own card's.
+"$REPO/serverbench/.venv/bin/python" "$REPO/serverbench/scripts/colab/hardware.py" check "$TASK" || exit 2
 SB=/opt/serverbench
 export HF_HOME="${HF_HOME:-$SB/hf}" PATH="$SB/bin:$PATH"
 module="$REPO/serverbench/harness/final_validate/tasks/${TASK,,}.py"

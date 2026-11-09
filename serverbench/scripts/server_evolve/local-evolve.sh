@@ -25,6 +25,11 @@ if [ "${1:-}" = "--hours" ]; then HOURS="$2"; shift 2; fi
 [ "$(id -u)" = 0 ] || { echo "the local backend runs as root" >&2; exit 2; }
 [ -d "$REPO/serving_tasks/$TASK" ] || { echo "no such task: $TASK" >&2; exit 2; }
 
+# The repository's tasks, never a guessed root: `spine` would otherwise look at
+# /workspace/task_context -- the agent's writable copy -- whenever one shows.
+export SERVERBENCH_TASK_ROOT="$REPO/serving_tasks"
+# A task's bars and dollars are its own card's.
+"$REPO/serverbench/.venv/bin/python" "$REPO/serverbench/scripts/colab/hardware.py" check "$TASK" || exit 2
 SB=/opt/serverbench
 export HF_HOME="${HF_HOME:-$SB/hf}"
 export PATH="$SB/bin:$PATH"

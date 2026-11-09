@@ -1,4 +1,4 @@
-# Running ServerBench on Google Colab (one L4)
+# Running ServerBench on Google Colab (one GPU)
 
 [繁體中文](COLAB.zh-TW.md)
 
@@ -8,7 +8,7 @@ runtime, which is what a Colab runtime is: root, one GPU, `CAP_SYS_ADMIN`, but
 no docker and no `CAP_NET_ADMIN`.
 
 The notebook is [`serverbench/scripts/colab/ServerBench_Colab.ipynb`](serverbench/scripts/colab/ServerBench_Colab.ipynb).
-Open it in Colab with an **L4** runtime and run it top to bottom.
+Open it in Colab with a GPU runtime (**L4** by default; see *Switching GPUs*) and run it top to bottom.
 
 ## What stays the same
 
@@ -49,6 +49,42 @@ private directories unreadable, loopback and GPU working, nothing left behind.
 4. `serverbench/scripts/server_evolve/local-evolve.sh <task> --hours 3` -- once
    per agent (`AGENT_CLI=claude|codex`).
 
+## Switching GPUs
+
+Supported, with one rule: **one task per GPU type, calibrated on that card**.
+A task's p90 bars are SGLang's on its card and its dollars are that card's
+hours; an L4 task run on an A100 would score A100 numbers against L4 bars.
+Nothing upstream compares the card a run gets with the card its task names,
+so `serverbench/scripts/colab/hardware.py` does: `local-evolve.sh`,
+`verdict-only.sh` and `calibrate.py search|seeds` refuse a mismatch
+(`SB_ALLOW_HARDWARE_MISMATCH=1` overrides, for debugging only).
+
+| Colab GPU | task suffix | status |
+|---|---|---|
+| L4 (24 GB) | `L4` | supported; built and tested for (sm_89) |
+| A100 40 GB | `A100` | expected to work (Ampere, bf16); not run end to end |
+| A100 80 GB | `A10080GB` | as above; a separate task (different memory, different SGLang defaults) |
+| H100 80 GB | `H100` | expected to work (Hopper) |
+| RTX PRO 6000 (G4) | `RTXPRO6000` | experimental: Blackwell sm_120, SGLang 0.5.19 kernels unverified |
+| T4 (16 GB) | `T4` | unsupported: no bf16 on Turing (`SB_ALLOW_UNSUPPORTED_GPU=1` tries anyway) |
+
+Steps (the notebook does them): pick the runtime's GPU; leave `TASK = None`,
+which becomes `qwen3_5_2b_standard_1x<suffix>` for the detected card; set its
+hourly rate in `GPU_RATE`; after setup and restore, cell 5b runs
+`hardware.py new-task`, which copies the L4 task (model, token prices,
+framework flags, correctness settings) with the new hardware and rate and
+saves it to the remote; then **calibrate** (section 6) before comparing
+agents. By hand:
+
+```
+python3 serverbench/scripts/colab/hardware.py detect
+serverbench/.venv/bin/python serverbench/scripts/colab/hardware.py new-task --usd-per-gpu-hour 1.50
+export TASK=$(python3 serverbench/scripts/colab/hardware.py task)
+```
+
+A new task's files are not in git; `persist.sh` keeps them. To commit one,
+also pin its bars in `serverbench/tests/contracts/test_the_p90_bars.py`.
+
 ## Credentials: subscriptions on both
 
 | agent | subscription | API key |
@@ -79,9 +115,9 @@ the run's accepted head, with no agent and no API cost.
 
 ## Known differences from the paper's setup
 
-* The hardware is an L4 (sm_89, 24 GB, ~300 GB/s), not an L40; numbers are
-  comparable only with other runs of the L4 task.
-* The L4 hourly rate in `contract.yaml` (0.80 USD) is an operator-set
+* The hardware is a Colab GPU (an L4 by default: sm_89, 24 GB, ~300 GB/s), not
+  an L40; numbers are comparable only with runs of the same task (same card).
+* The hourly rate in `contract.yaml` (0.80 USD by default) is an operator-set
   placeholder. It scales every run's `dollars_per_dollar` by the same factor,
   so it does not change a comparison between agents.
 * The agent can see the host filesystem (with an unprivileged user's
@@ -91,7 +127,7 @@ the run's accepted head, with no agent and no API cost.
 * After calibration, update the pinned bars for the L4 task in
   `serverbench/tests/contracts/test_the_p90_bars.py` (`P90_ONLY`).
 
-## A fix to upstream
+## Fixes
 
 The plain reference (`final_validate/private_correctness.py`) runs SGLang with
 `--enable-deterministic-inference` on Triton, which cuts prefill chunks only at
@@ -100,3 +136,12 @@ is 2048, so any prompt longer than one chunk was never scheduled and the EOS
 audit's long teacher-forced requests wedged the verdict. The plain reference's
 chunk is now pinned to 4096; boundaries are aligned either way, so the scored
 logprobs do not change.
+
+Host-side task root (a fix to the local backend itself). Without
+`SERVERBENCH_TASK_ROOT`, the harness guesses `/workspace/task_context` as its
+task root. A docker host has no `/workspace`, but the local backend placed one
+on the host, pointing at the agent's writable workspace, and left it after the
+run -- so a host tool, the driver and the verdict included, could read the
+agent's copy of the task contract. Every host entry point now pins
+`SERVERBENCH_TASK_ROOT=<repo>/serving_tasks`, and `local_sandbox.terminate`
+removes the symlinks and binds `local_env` placed.

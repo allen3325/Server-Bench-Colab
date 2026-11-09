@@ -45,6 +45,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
+# The repository's tasks, never a guessed root: `spine` would otherwise look
+# at /workspace/task_context, the agent's writable copy, if one is showing.
+os.environ["SERVERBENCH_TASK_ROOT"] = str(REPO / "serving_tasks")
 sys.path.insert(0, str(REPO / "serverbench" / "harness"))
 sys.path.insert(0, str(REPO))
 
@@ -264,7 +267,7 @@ def cmd_record(args) -> int:
         "arm": "sglang", "image": image, "window_seconds": 1800,
         "selection_rule": RULE, "adopted": adopted,
         "random_seeds": "fresh per run",
-        "host": "Google Colab L4 runtime; SGLang at the pinned release from "
+        "host": f"Google Colab runtime ({_gpu_name()}); SGLang at the pinned release from "
                 "its own interpreter rather than the pinned image "
                 "(serverbench/scripts/colab/calibrate.py)",
         "points": [{k: r[k] for k in ("label", "offered", "random_seed",
@@ -286,7 +289,7 @@ def cmd_record(args) -> int:
     }
     reference.write_text(yaml.safe_dump(body, sort_keys=False, width=200), "utf-8")
     taskctl = [sys.executable, str(REPO / "serving_tasks/_manage/taskctl.py")]
-    reason = (f"measured on this L4: worst p90 of {len(runs)} SGLang seeds at "
+    reason = (f"measured on this {_gpu_name()}: worst p90 of {len(runs)} SGLang seeds at "
               f"c{adopted} ({out})")
     subprocess.run(taskctl + ["set", args.task, "--p90-ttft", str(published_ttft),
                               "--p90-tpot", str(published_tpot),
@@ -297,6 +300,20 @@ def cmd_record(args) -> int:
     print(f"\n{args.task}: bars {published_ttft} ms / {published_tpot} ms, "
           f"reference concurrency {adopted}")
     return got.returncode
+
+
+def _gpu_name() -> str:
+    got = subprocess.run(["nvidia-smi", "-i", os.environ.get("GPU", "0"),
+                          "--query-gpu=name", "--format=csv,noheader"],
+                         capture_output=True, text=True)
+    return got.stdout.strip().splitlines()[0] if got.stdout.strip() else "unknown GPU"
+
+
+def _hardware_check(task: str) -> None:
+    """A task's bars are its own card's: refuse to measure them on another."""
+    got = subprocess.run([sys.executable, str(HERE / "hardware.py"), "check", task])
+    if got.returncode != 0:
+        raise SystemExit(got.returncode)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -317,6 +334,8 @@ def main(argv: list[str] | None = None) -> int:
                                       help="override the adopted point")
     sub.choices["record"].add_argument("--min-seeds", type=int, default=5)
     args = ap.parse_args(argv)
+    if args.verb in ("search", "seeds"):
+        _hardware_check(args.task)
     try:
         return {"search": cmd_search, "seeds": cmd_seeds,
                 "record": cmd_record}[args.verb](args)

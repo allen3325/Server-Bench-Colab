@@ -361,6 +361,15 @@ def main(argv: list[str] | None = None) -> int:
         make_traversable(workspace)
     print(f"paths       {len(placed)} placed by "
           f"{'bind mount' if binding else 'symlink (no mount permission here)'}")
+    # What `terminate` takes back down. Above all /workspace: it shows the
+    # agent's writable tree on the HOST, and a host tool that guesses its task
+    # root (`spine` looks at /workspace/task_context) must not find the
+    # agent's copy of the task there after the sandbox is gone.
+    state = sandbox.state_dir(args.name)
+    state.mkdir(parents=True, exist_ok=True)
+    (state / "placed.json").write_text(json.dumps(
+        [{"target": p["target"], "how": p["how"]} for p in placed
+         if p["how"] in ("bind", "symlink")], indent=1))
 
     # --------------------------------------------------------------- broker
     socket_path = sandbox.STATE_ROOT / f"{args.name}.egress.sock"
