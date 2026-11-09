@@ -1,5 +1,7 @@
 # Running ServerBench on Google Colab (one L4)
 
+[繁體中文](COLAB.zh-TW.md)
+
 This fork adds a third environment backend, **local**, beside Harbor/docker and
 Modal. It runs an evolve on the machine the driver is on, with no container
 runtime, which is what a Colab runtime is: root, one GPU, `CAP_SYS_ADMIN`, but
@@ -36,17 +38,44 @@ private directories unreadable, loopback and GPU working, nothing left behind.
 ## Order of work
 
 1. `serverbench/scripts/colab/setup.sh` -- per session (a Colab VM is discarded).
-2. `serverbench/scripts/colab/calibrate.py search | seeds | record` -- once per
+2. `serverbench/scripts/colab/persist.sh restore` -- earlier results, from the
+   rclone remote.
+3. `serverbench/scripts/colab/calibrate.py search | seeds | record` -- once per
    task: the SGLang operating point and the p90 bars **on the L4**
    (`docs/harness/bar-derivation.md`). The L4 task
    `qwen3_5_2b_standard_1xL4` ships with provisional bars (4100 ms / 35 ms)
    until this runs; `record` replaces them and sets the reference concurrency.
    Every point is resumable.
-3. `serverbench/scripts/server_evolve/local-evolve.sh <task> --hours 3` -- once
+4. `serverbench/scripts/server_evolve/local-evolve.sh <task> --hours 3` -- once
    per agent (`AGENT_CLI=claude|codex`).
-4. `serverbench/scripts/colab/persist.sh save|restore` -- results to and from
-   Google Drive. Drive must be **unmounted** while an agent runs;
-   `local-evolve.sh` refuses to start otherwise.
+
+## Credentials: subscriptions on both
+
+| agent | subscription | API key |
+|---|---|---|
+| Claude Code | `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` | `ANTHROPIC_API_KEY` |
+| Codex | `codex login --device-auth` in the notebook, or your `~/.codex/auth.json` as `CODEX_AUTH_JSON` | `OPENAI_API_KEY` |
+
+## Disconnects and checkpoints
+
+A browser disconnect or a kernel restart does not stop a run (it is started
+with `setsid nohup`); `reattach()` in the notebook follows it again. A
+reclaimed VM loses its disk, so with an rclone config (`RCLONE_CONF`, a remote
+named `sb`: Google Drive with `scope=drive.file`, or a GCS bucket)
+`local-evolve.sh` starts `serverbench/scripts/colab/checkpoint.py` beside the
+driver. It saves the run every 10 minutes and soon after every new version,
+never while a measurement runs, and once more when the driver exits; it also
+copies the agent's Claude transcripts to `<run>/claude-projects`, where a
+make-up run (`run.py --resume-run`) looks for them.
+
+It uploads as root from the host network namespace, with nothing mounted: the
+agent's sandbox gains no route and no path. rclone and its token are
+root-only, symlinks are skipped rather than followed (a run directory holds
+files the agent wrote), and every `secrets/` directory is excluded.
+
+If the VM goes during the final verdict, restore and run
+`serverbench/scripts/colab/verdict-only.sh [RUN_DIR]`: the verdict alone, on
+the run's accepted head, with no agent and no API cost.
 
 ## Known differences from the paper's setup
 
@@ -61,3 +90,13 @@ private directories unreadable, loopback and GPU working, nothing left behind.
   non-root user.
 * After calibration, update the pinned bars for the L4 task in
   `serverbench/tests/contracts/test_the_p90_bars.py` (`P90_ONLY`).
+
+## A fix to upstream
+
+The plain reference (`final_validate/private_correctness.py`) runs SGLang with
+`--enable-deterministic-inference` on Triton, which cuts prefill chunks only at
+multiples of 4096 tokens. SGLang's default chunk on a card under 35 GB (the L4)
+is 2048, so any prompt longer than one chunk was never scheduled and the EOS
+audit's long teacher-forced requests wedged the verdict. The plain reference's
+chunk is now pinned to 4096; boundaries are aligned either way, so the scored
+logprobs do not change.

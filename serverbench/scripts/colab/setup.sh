@@ -11,15 +11,17 @@
 #   STAGES="model corpus" bash .../setup.sh            # just some stages
 #
 # Stages, in order: system uv submodules harness agentx wheelhouse answers
-#                   agentpython cuda clis sglang model corpus user check
+#                   agentpython cuda clis rclone sglang model corpus user check
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 SB=/opt/serverbench
 TASK="${TASK:-qwen3_5_2b_standard_1xL4}"
-STAGES="${STAGES:-system uv submodules harness agentx wheelhouse answers agentpython cuda clis sglang model corpus user check}"
+STAGES="${STAGES:-system uv submodules harness agentx wheelhouse answers agentpython cuda clis rclone sglang model corpus user check}"
 NODE_VERSION="${NODE_VERSION:-v22.11.0}"
 SGLANG_SPEC="${SGLANG_SPEC:-sglang[all]==0.5.19}"
+RCLONE_VERSION="v1.68.2"
+RCLONE_SHA256="0e6fa18051e67fc600d803a2dcb10ddedb092247fc6eee61be97f64ec080a13c"
 
 export UV_PYTHON_INSTALL_DIR="$SB/python"     # interpreters the agent can exec
 export HF_HOME="$SB/hf"                       # the model and corpus cache
@@ -187,6 +189,24 @@ if want clis; then
     for tool in claude codex; do ln -sf "$SB/npm/bin/$tool" "$SB/bin/$tool"; done
     chmod -R a+rX "$SB/node" "$SB/npm"
     ok "claude $("$SB/bin/claude" --version 2>/dev/null | head -1); codex $("$SB/bin/codex" --version 2>/dev/null | head -1)"
+fi
+
+if want rclone; then
+    say "rclone $RCLONE_VERSION (root-only: off-VM checkpoints and persist.sh)"
+    # In root's home, which the agent cannot enter: the uploader is the
+    # operator's tool, not the agent's.
+    if [ "$(/root/bin/rclone version 2>/dev/null | head -1 | awk '{print $2}')" != "$RCLONE_VERSION" ]; then
+        tmp="$(mktemp -d)"
+        curl -fsSL -o "$tmp/rclone.zip" \
+            "https://downloads.rclone.org/$RCLONE_VERSION/rclone-$RCLONE_VERSION-linux-amd64.zip"
+        echo "$RCLONE_SHA256  $tmp/rclone.zip" | sha256sum -c --quiet - || die "rclone checksum mismatch"
+        "$PY" -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" \
+            "$tmp/rclone.zip" "$tmp"
+        install -D -m 0700 "$tmp/rclone-$RCLONE_VERSION-linux-amd64/rclone" /root/bin/rclone
+        rm -rf "$tmp"
+    fi
+    chmod 700 /root
+    ok "$(/root/bin/rclone version | head -1)"
 fi
 
 if want sglang; then

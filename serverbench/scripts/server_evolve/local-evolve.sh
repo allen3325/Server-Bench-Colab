@@ -45,10 +45,46 @@ fi
 
 printf '%s %s locally, %s h, %s %s\n' "$(date -u '+%FT%TZ')" "$TASK" "$HOURS" \
     "${AGENT_CLI:-claude}" "${AGENT_MODEL:-}"
+started="$(date +%s)"
+# The driver gets its own session, so a signal to this script's process group
+# does not ALSO reach it directly: it must see exactly one stop. A second
+# signal lands in its evidence-preserving teardown and cuts that short,
+# leaving the sandbox standing.
 SERVERBENCH_BACKEND=local GPU="${GPU:-0}" MODEL_DIR="$MODEL_DIR" \
     TASK_ROOT="$REPO/serving_tasks" \
-    bash serverbench/scripts/server_evolve/evolve-task.sh "$TASK" \
-        --hours "$HOURS" --stop timebox "$@"
-rc=$?
+    setsid bash serverbench/scripts/server_evolve/evolve-task.sh "$TASK" \
+        --hours "$HOURS" --stop timebox "$@" &
+driver=$!
+echo "$driver" > /run/serverbench-local-driver.pid
+forwarded=0
+forward_stop() {
+    [ "$forwarded" = 1 ] && return
+    forwarded=1
+    kill -TERM "$driver" 2>/dev/null
+}
+trap forward_stop TERM INT HUP
+
+# Off-VM checkpoints while the run lasts (serverbench/scripts/colab/checkpoint.py):
+# a Colab VM can be reclaimed mid-run, and its disk goes with it. Root, host
+# network, no mount -- the agent's sandbox is untouched. Skipped without an
+# rclone config; SB_CHECKPOINT=0 turns it off.
+checkpointer=""
+if [ "${SB_CHECKPOINT:-1}" != 0 ] && [ -f "$REPO/serverbench/artifacts/secrets/rclone.conf" ]; then
+    "$REPO/serverbench/.venv/bin/python" serverbench/scripts/colab/checkpoint.py \
+        --task "$TASK" --driver-pid "$driver" --since "$started" \
+        --interval "${SB_CHECKPOINT_INTERVAL:-600}" &
+    checkpointer=$!
+else
+    echo "no off-VM checkpoints (no rclone config): a reclaimed VM loses this run"
+fi
+
+# `wait` returns early when a trapped signal arrives; keep waiting for the
+# driver, which handles the signal itself and preserves the run.
+rc=0
+while kill -0 "$driver" 2>/dev/null; do
+    wait "$driver"; rc=$?
+done
+[ -n "$checkpointer" ] && wait "$checkpointer"
+rm -f /run/serverbench-local-driver.pid
 printf '%s run finished rc=%s\n' "$(date -u '+%FT%TZ')" "$rc"
 exit "$rc"
