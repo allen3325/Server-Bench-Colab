@@ -125,6 +125,8 @@ rclone config show sb      # 把印出來的整段貼進 Colab Secret RCLONE_CON
 
 `drive.file` 權限只能存取 rclone 自己建立的檔案，碰不到 Drive 裡其他東西。也可以改用 GCS bucket 的 remote。預設的目的地是 `sb:serverbench-colab`（可以用 `SB_REMOTE` 改）。
 
+**建議設定自己的 `client_id`。** 沒有 `client_id` 的 Drive remote 用的是 rclone 內建、全世界使用者共用的 Google API 專案，它的每分鐘配額常被別人用完，這時存檔會得到 `403 ... Quota exceeded ... rateLimitExceeded`（`couldn't find root directory ID`）。`persist.sh` 遇到這種失敗會自動重試（預設 6 次，間隔從 20 秒起每次加倍），重試完仍失敗會列出沒存到的路徑並以非 0 結束；要根治，照 <https://rclone.org/drive/#making-your-own-client-id> 建一組自己的 OAuth client，再用 `rclone config create sb drive scope=drive.file client_id=... client_secret=...` 重建 remote。
+
 **補跑最後驗證**（`serverbench/scripts/colab/verdict-only.sh [RUN_DIR] [--force]`）：如果 agent 已經跑完，VM 卻在最後驗證期間被回收，還原後對該 run 只跑最後驗證就好。不需要 agent，不花 API 額度，只花 GPU 時間。已經有驗證結果的 run 會拒絕重跑，除非加上 `--force`。補跑這件事會記在 run 的 journal（`final_validation_rerun`）。
 
 ### 為什麼雲端存檔不會破壞隔離

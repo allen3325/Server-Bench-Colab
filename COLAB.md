@@ -147,6 +147,14 @@ never while a measurement runs, and once more when the driver exits; it also
 copies the agent's Claude transcripts to `<run>/claude-projects`, where a
 make-up run (`run.py --resume-run`) looks for them.
 
+A Drive remote without its own `client_id` uses rclone's shared API project,
+whose per-minute quota other users exhaust; a save then fails with `403 ...
+rateLimitExceeded` (`couldn't find root directory ID`). `persist.sh` retries
+every rclone call (6 tries, pauses doubling from 20 s; `SB_RCLONE_TRIES`,
+`SB_RCLONE_PAUSE`), saves the remaining paths when one fails, and exits
+non-zero naming what is still only on the VM. The cure is your own client:
+<https://rclone.org/drive/#making-your-own-client-id>.
+
 It uploads as root from the host network namespace, with nothing mounted: the
 agent's sandbox gains no route and no path. rclone and its token are
 root-only, symlinks are skipped rather than followed (a run directory holds

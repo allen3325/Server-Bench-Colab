@@ -103,7 +103,7 @@ md("""
 
 | Secret | 說明 |
 |---|---|
-| `RCLONE_CONF` | 一個名為 `sb` 的 rclone remote 設定。Google Drive：在自己電腦執行 `rclone config create sb drive scope=drive.file`（瀏覽器授權），再用 `rclone config show sb` 印出整段貼上。`drive.file` 權限只能存取 rclone 自己建立的檔案，碰不到你 Drive 裡其他東西。也可以改用 GCS bucket 的 remote |
+| `RCLONE_CONF` | 一個名為 `sb` 的 rclone remote 設定。Google Drive：在自己電腦執行 `rclone config create sb drive scope=drive.file`（瀏覽器授權），再用 `rclone config show sb` 印出整段貼上。`drive.file` 權限只能存取 rclone 自己建立的檔案，碰不到你 Drive 裡其他東西。建議加上自己的 `client_id`/`client_secret`（<https://rclone.org/drive/#making-your-own-client-id>）：不加的話用的是 rclone 全球共用的 API 配額，存檔偶爾會遇到 `403 rateLimitExceeded`（`persist.sh` 會自動重試）。也可以改用 GCS bucket 的 remote |
 """)
 code("""
 from google.colab import userdata

@@ -36,7 +36,7 @@ FILTERS=(--skip-links
          --exclude ".pytest_cache/**" --exclude "*.safetensors")
 # Gentle by default: a checkpoint can land while a full test measures.
 TUNING=(--transfers "${SB_TRANSFERS:-2}" --checkers 4
-        --bwlimit "${SB_BWLIMIT:-20M}" --retries 3 --low-level-retries 5)
+        --bwlimit "${SB_BWLIMIT:-20M}" --retries 3 --low-level-retries 10)
 
 # Repository paths (relative) that hold results or a calibrated task.
 PATHS=(
@@ -48,49 +48,83 @@ PATHS=(
     "serverbench/artifacts/final_validation"
 )
 
-rc() { nice -n 19 ionice -c3 "$RCLONE" "$@"; }
+# Every rclone call goes through `rc`, which tries again with a growing pause.
+# A Drive remote without its own client_id shares rclone's public API project,
+# whose per-minute quota other people exhaust: the 403 then arrives while the
+# remote is being opened ("couldn't find root directory ID"), which rclone's
+# own --retries does not cover. Exit 3 (directory not found) and 4 (file not
+# found) are answers, not failures, and are returned at once.
+rc() {
+    local try=1 tries="${SB_RCLONE_TRIES:-6}" pause="${SB_RCLONE_PAUSE:-20}" code
+    while :; do
+        code=0
+        nice -n 19 ionice -c3 "$RCLONE" "$@" || code=$?
+        case "$code" in 0|3|4) return "$code" ;; esac
+        [ "$try" -lt "$tries" ] || return "$code"
+        echo "rclone $1 failed (exit $code); try $((try + 1))/$tries in ${pause}s" >&2
+        sleep "$pause"; try=$((try + 1)); pause=$((pause * 2))
+    done
+}
+# has REMOTE_DIR [NAME]: 0 when the directory (or NAME in it) is there, 1 when
+# it is not, and the script stops when the remote could not be asked -- "the
+# quota ran out" must never read as "nothing was saved".
+has() {
+    local listing code=0
+    listing=$(rc lsf "$1" 2>"$ERR") || code=$?
+    case "$code" in
+        0) [ -z "${2:-}" ] || grep -qx "$2/\?" <<<"$listing" ;;
+        3) return 1 ;;
+        *) cat "$ERR" >&2; echo "could not list $1 (rclone exit $code)" >&2; exit 1 ;;
+    esac
+}
+ERR="$(mktemp)"; trap 'rm -f "$ERR"' EXIT
 
 case "$VERB" in
     save)
+        # One path failing does not stop the others: what can be saved is.
+        failed=()
         for rel in "${PATHS[@]}"; do
             src="$REPO/$rel"
             [ -e "$src" ] || continue
             if [ -d "$src" ]; then
                 # copy, not sync: a remote file is never deleted because this
                 # VM no longer has it (an earlier VM may have written it).
-                rc copy "${FILTERS[@]}" "${TUNING[@]}" "$src" "$REMOTE/repo/$rel"
+                rc copy "${FILTERS[@]}" "${TUNING[@]}" "$src" "$REMOTE/repo/$rel" || failed+=("$rel")
             else
-                rc copyto "${TUNING[@]}" "$src" "$REMOTE/repo/$rel"
+                rc copyto "${TUNING[@]}" "$src" "$REMOTE/repo/$rel" || failed+=("$rel")
             fi
         done
         if [ -d "$CALIBRATION" ]; then
-            rc copy "${FILTERS[@]}" "${TUNING[@]}" "$CALIBRATION" "$REMOTE/calibration"
+            rc copy "${FILTERS[@]}" "${TUNING[@]}" "$CALIBRATION" "$REMOTE/calibration" || failed+=("$CALIBRATION")
+        fi
+        if [ ${#failed[@]} -gt 0 ]; then
+            echo "NOT saved to $REMOTE: ${failed[*]} -- still only on this VM; run save again" >&2
+            exit 1
         fi
         echo "saved to $REMOTE"
         ;;
     restore)
-        if ! "$RCLONE" lsf "$REMOTE/repo" >/dev/null 2>&1; then
+        if ! has "$REMOTE/repo"; then
             echo "nothing saved at $REMOTE yet"; exit 0
         fi
         for rel in "${PATHS[@]}"; do
-            if "$RCLONE" lsf "$REMOTE/repo/$(dirname "$rel")" 2>/dev/null \
-                    | grep -qx "$(basename "$rel")/\?"; then
+            if has "$REMOTE/repo/$(dirname "$rel")" "$(basename "$rel")"; then
                 if [[ "$rel" == *.py ]]; then
-                    "$RCLONE" copyto "$REMOTE/repo/$rel" "$REPO/$rel"
+                    rc copyto "$REMOTE/repo/$rel" "$REPO/$rel"
                 else
                     mkdir -p "$REPO/$rel"
-                    "$RCLONE" copy "${FILTERS[@]}" "$REMOTE/repo/$rel" "$REPO/$rel"
+                    rc copy "${FILTERS[@]}" "$REMOTE/repo/$rel" "$REPO/$rel"
                 fi
             fi
         done
-        if "$RCLONE" lsf "$REMOTE/calibration" >/dev/null 2>&1; then
+        if has "$REMOTE/calibration"; then
             mkdir -p "$CALIBRATION"
-            "$RCLONE" copy "$REMOTE/calibration" "$CALIBRATION"
+            rc copy "$REMOTE/calibration" "$CALIBRATION"
         fi
         echo "restored from $REMOTE"
         ;;
     status)
-        "$RCLONE" cat "$REMOTE/checkpoint.json" 2>/dev/null || echo "no checkpoint at $REMOTE"
+        rc cat "$REMOTE/checkpoint.json" 2>/dev/null || echo "no checkpoint at $REMOTE"
         ;;
     *) echo "usage: persist.sh save|restore|status [REMOTE]" >&2; exit 2 ;;
 esac
